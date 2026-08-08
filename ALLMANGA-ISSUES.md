@@ -9,16 +9,27 @@
 
 ## TL;DR
 
-The AllManga anime provider broke when the service migrated from
-`allanime.to` → **`mkissa.to`** and added a client-computed **"aaReq" crypto
-extension** to every episode GraphQL query. The old endpoint started returning
-`AA_CRYPTO_MISSING`.
+### The Issue
 
-The root cause turned out to be a **missing AES-256-GCM auth tag** in the ported
-aaReq builder (Node's `getAuthTag()` vs WebCrypto's combined `ciphertext||tag`
-output). Once the 16-byte tag was appended, the server accepted every request
-and real episode sources were returned. **16/16 titles resolve** through the
-production module today.
+The AllManga anime provider **stopped resolving episodes**. The service migrated
+from `allanime.to` → **`mkissa.to`** and added a client-computed **"aaReq"
+crypto extension** to every episode GraphQL query. The old endpoint started
+returning `AA_CRYPTO_MISSING` — no anime episode could fetch sources.
+
+### The Root Cause
+
+A **missing AES-256-GCM auth tag** in the ported aaReq builder. The site's
+frontend uses WebCrypto, whose `encrypt()` output is `ciphertext || authTag`
+combined — but Node keeps the GCM tag separate in `cipher.getAuthTag()`. The
+blob was built as `[0x01][iv][ciphertext]` — **16 bytes short** — so the
+server's tag check failed *before it even looked at the payload*. Every request
+returned `AA_CRYPTO_STALE`, masking the real bug for hours.
+
+### The Fix
+
+Append the 16-byte auth tag: `[0x01][iv][ciphertext][authTag(16)]`. Once the
+tag was appended, the server accepted every request and returned real episode
+sources — **16/16 titles resolve** through the production module today.
 
 ---
 
