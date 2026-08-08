@@ -33,6 +33,39 @@ sources — **16/16 titles resolve** through the production module today.
 
 ---
 
+## Root-cause diff — before / after (`buildAaReq`)
+
+This is the actual code change in `src/ipc/allmanga.js` that fixed the outage.
+The buggy version built the blob without the GCM tag; the fixed version
+appends it via `cipher.getAuthTag()`:
+
+```diff
+ function buildAaReq(key, epoch, buildId, queryHash, lane) {
+   const ts = Math.floor(Date.now() / WINDOW_MS) * WINDOW_MS;
+   const iv = crypto
+     .createHash("sha256")
+     .update(`${epoch}:${buildId}:${queryHash}:${ts}:${lane}`, "utf8")
+     .digest()
+     .subarray(0, IV_SIZE);
+   const payload = JSON.stringify({ v: 1, ts, epoch, buildId, qh: queryHash, k: lane });
+   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+   const ct = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+-  // BUG: WebCrypto's encrypt() returns ciphertext||authTag combined, but Node
+-  // keeps the GCM tag separate in getAuthTag(). Without it the blob was 16
+-  // bytes short, so the server rejected EVERY aaReq as AA_CRYPTO_STALE
+-  // before even parsing the payload.
+-  const blob = Buffer.concat([Buffer.from([1]), iv, ct]);
++  const tag = cipher.getAuthTag(); // ← the missing 16-byte GCM auth tag
++  const blob = Buffer.concat([Buffer.from([1]), iv, ct, tag]);
+   return blob.toString("base64");
+ }
+```
+
+One missing line — the tag — was the difference between `AA_CRYPTO_STALE` on
+every request and real episode sources on the first try.
+
+---
+
 ## Issues Found (chronological)
 
 ### 1. Service migrated domains & added client crypto — `AA_CRYPTO_MISSING`
